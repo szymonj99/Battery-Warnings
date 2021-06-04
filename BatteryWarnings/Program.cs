@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Management;
 using System.Runtime.InteropServices;
+using System.Linq;
 
 namespace BatteryWarnings
 {
@@ -42,88 +43,90 @@ namespace BatteryWarnings
             return maximum;
         }
 
-        static float GetBatteryLevel()
+        static Battery GetBattery()
         {
-            // Windows
+            // For now, exit if system isn't Windows
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                Console.Write("This system is not currently supported, but there are plans to support it in the future. :)\n");
+                Console.Write("The application will exit once you press Enter.\n");
+                Console.ReadLine();
+                Environment.Exit(0);
+            }
+
+            // If statement here for the future
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                ManagementObjectSearcher mos = new ManagementObjectSearcher("SELECT EstimatedChargeRemaining FROM Win32_Battery");
-                object BatteryLevel = null;
+                var query = new ObjectQuery("Select * FROM Win32_Battery");
+                var searcher = new ManagementObjectSearcher(query);
+                var collection = searcher.Get();
 
-                if (mos.Get().Count == 1)
-                {
-                    foreach (var mo in mos.Get())
-                    {
-                        BatteryLevel = mo["EstimatedChargeRemaining"];
-                    }
-                }
-                Console.Write("Windows: {0}\n", BatteryLevel);
-                return float.Parse(BatteryLevel.ToString());
+                var result = collection.OfType<ManagementObject>().First();
+                Battery battery = new();
+                battery.SetChargeLevel(int.Parse(result.Properties["EstimatedChargeRemaining"].Value.ToString()));
+                battery.SetStatus((BatteryStatuses)int.Parse(result.Properties["BatteryStatus"].Value.ToString()));
+
+                return battery;
             }
 
-            // Linux
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-            {
-                using (System.Diagnostics.Process process = new System.Diagnostics.Process())
-                {
-                    process.StartInfo.FileName = "cat";
-                    process.StartInfo.Arguments = @"/sys/class/power_supply/BAT0/capacity";
-                    process.StartInfo.UseShellExecute = false;
-                    process.StartInfo.CreateNoWindow = true;
-                    process.StartInfo.RedirectStandardOutput = true;
-                    process.Start();
-                    string BatteryLevel = process.StandardOutput.ReadToEnd();
-                    process.WaitForExit();
+            // This will never be reached
+            Battery bat = new();
+            return bat;
 
-                    Console.Write("Linux: {0}\n", BatteryLevel);
-                    return float.Parse(BatteryLevel);
-                }
-            }
+            //// Linux
+            //else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            //{
+            //    using (System.Diagnostics.Process process = new System.Diagnostics.Process())
+            //    {
+            //        process.StartInfo.FileName = "cat";
+            //        process.StartInfo.Arguments = @"/sys/class/power_supply/BAT0/capacity";
+            //        process.StartInfo.UseShellExecute = false;
+            //        process.StartInfo.CreateNoWindow = true;
+            //        process.StartInfo.RedirectStandardOutput = true;
+            //        process.Start();
+            //        string BatteryLevel = process.StandardOutput.ReadToEnd();
+            //        process.WaitForExit();
 
-            // MacOS (sad) :(
-            else
-            {
-                return 0.0f;
-            }
+            //        Console.Write("Linux: {0}\n", BatteryLevel);
+            //        return float.Parse(BatteryLevel);
+            //    }
+            //}
+
+            //// MacOS (sad) :(
+            //else
+            //{
+            //    return 0.0f;
+            //}
         }
 
         static void MonitorBatteryLevel(uint kMin, uint kMax)
-        {            
+        {
+            Console.Write("Battery is now being monitored. You can minimise this window.\nThe system will beep if the charge needs to be plugged in or unplugged.\n");
+            Console.Write("Minimum: {0}\nMaximum: {1}", kMin, kMax);
             while (true)
             {
-                var BatteryLevel = GetBatteryLevel();
-                Console.Write("Float: {0}", BatteryLevel);
+                var battery = GetBattery();
 
-                if (BatteryLevel < kMin && !ToggledMinimum)
+                if (battery.ChargeLevel < kMin && battery.Status != BatteryStatuses.PluggedIn)
                 {
-                    ToggledMinimum = true;
-                    ToggledMaximum = true;
                     BeepMinimum = true;
                     AudioBeep();
                 }
-                else if (BatteryLevel > kMax && !ToggledMaximum)
+                else if (battery.ChargeLevel > kMax && battery.Status == BatteryStatuses.PluggedIn)
                 {
-                    ToggledMaximum = true;
-                    ToggledMinimum = false;
                     BeepMaximum = true;
                     AudioBeep();
                 }
-
-                if (BatteryLevel > kMin && BatteryLevel < kMax)
+                else
                 {
                     BeepMaximum = false;
                     BeepMinimum = false;
-                    ToggledMaximum = false;
-                    ToggledMinimum = false;
                 }
 
-                System.Threading.Thread.Sleep(60000);
+                System.Threading.Thread.Sleep(15000);
             }
 
         }
-
-        static bool ToggledMinimum = false;
-        static bool ToggledMaximum = false;
 
         static bool BeepMinimum = false;
         static bool BeepMaximum = false;
@@ -137,6 +140,7 @@ namespace BatteryWarnings
                 for (int i = 0; i < beepTimes; i++)
                 {
                     Console.Beep();
+                    System.Threading.Thread.Sleep(400);
                 }
                 BeepMinimum = false;
             }
@@ -146,11 +150,69 @@ namespace BatteryWarnings
                 for (int i = 0; i < beepTimes; i++)
                 {
                     Console.Beep();
+                    System.Threading.Thread.Sleep(400);
                 }
                 BeepMaximum = false;
             }
         }
 
+        enum BatteryStatuses
+        {
+            Battery = 1,
+            PluggedIn
+        }
+
+        struct Battery
+        {
+            private int chargeLevel;
+            private BatteryStatuses status;
+            private string stringStatus;
+
+            public readonly int ChargeLevel
+            {
+                get { return chargeLevel; }
+            }
+            public readonly BatteryStatuses Status
+            {
+                get { return status; }
+            }
+
+            public readonly string StringStatus
+            {
+                get { return stringStatus; }
+            }
+
+            public void SetChargeLevel(int level)
+            {
+                chargeLevel = level;
+            }
+
+            public void SetStatus(BatteryStatuses status)
+            {
+                this.status = status;
+                
+                switch (status)
+                {
+                    case BatteryStatuses.Battery:
+                        {
+                            stringStatus = "Battery";
+                            break;
+                        }
+                    case BatteryStatuses.PluggedIn:
+                        {
+                            stringStatus = "Plugged In";
+                            break;
+                        }
+                    default:
+                        break;
+                }
+            }
+
+            public override string ToString()
+            {
+                return String.Format("Charge Level: {0}\nStatus: {1} ({2})", ChargeLevel, StringStatus, (int)Status);
+            }
+        }
 
         static void Main(string[] args)
         {
@@ -158,7 +220,9 @@ namespace BatteryWarnings
 
             var min = GetMinimumBatteryLevel();
             var max = GetMaximumBatteryLevel();
+            Console.Clear();
             MonitorBatteryLevel(min, max);
+            Environment.Exit(0);
         }
     }
 }
